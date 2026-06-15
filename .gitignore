@@ -1,0 +1,20 @@
+# --- Build-Artefakte (Arduino IDE / ESP32) ---
+build/
+**/build/
+*.bin
+*.elf
+*.map
+
+# PlatformIO (falls genutzt)
+.pio/
+.pioenvs/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Lokale Geheimnisse / Overrides (siehe README.md im Firmware-Projekt)
+secrets.h
+DF3MT_Secrets.h

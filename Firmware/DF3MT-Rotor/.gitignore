@@ -1,0 +1,19 @@
+# --- Build-Artefakte (Arduino IDE 2 / esp32) ---
+build/
+*.bin
+*.elf
+*.map
+
+# PlatformIO (falls genutzt)
+.pio/
+.pioenvs/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Optional: lokale Zugangsdaten / Overrides (siehe README.md)
+secrets.h
+DF3MT_Secrets.h

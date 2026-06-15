@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b14">
+  <meta name="description" content="PortableRotor — tragbarer Antennen-Rotor mit ESP32, Web-Oberfläche, MQTT und Home Assistant. Open Hardware von DF3MT.">
+  <title>PortableRotor · DF3MT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg0: #070b14;
+      --bg1: #0f1628;
+      --card: rgba(255,255,255,0.045);
+      --card2: rgba(255,255,255,0.08);
+      --border: rgba(255,255,255,0.1);
+      --text: #e8ecff;
+      --muted: #8b9dc0;
+      --cyan: #38bdf8;
+      --violet: #a78bfa;
+      --mint: #34d399;
+      --rose: #fb7185;
+      --radius: 18px;
+      --shadow: 0 28px 80px rgba(0,0,0,0.55);
+      --font-display: "Outfit", system-ui, sans-serif;
+      --font-body: "DM Sans", system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--font-body);
+      font-size: 1.05rem;
+      line-height: 1.6;
+      color: var(--text);
+      background:
+        radial-gradient(100% 70% at 85% -10%, rgba(56,189,248,0.18) 0%, transparent 55%),
+        radial-gradient(80% 50% at 0% 100%, rgba(167,139,250,0.12) 0%, transparent 50%),
+        linear-gradient(168deg, var(--bg0), var(--bg1));
+      min-height: 100vh;
+    }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; text-underline-offset: 3px; }
+    .wrap { width: min(1120px, 100% - 2rem); margin-inline: auto; padding-block: 0 4rem; }
+    header.nav {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      backdrop-filter: blur(14px);
+      background: rgba(7,11,20,0.72);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 0;
+      width: min(1120px, 100% - 2rem);
+      margin-inline: auto;
+    }
+    .brand {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.15rem;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .brand:hover { text-decoration: none; color: var(--cyan); }
+    .nav-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.25rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.65rem 1.15rem;
+      border-radius: 999px;
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 0.88rem;
+      border: 1px solid rgba(56,189,248,0.45);
+      background: rgba(56,189,248,0.12);
+      color: var(--text);
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 12px 32px rgba(56,189,248,0.2); text-decoration: none; }
+    .btn--ghost {
+      border-color: var(--border);
+      background: var(--card);
+    }
+    .hero {
+      padding-block: clamp(2.5rem, 6vw, 4.5rem);
+      display: grid;
+      gap: clamp(1.5rem, 4vw, 2.5rem);
+      grid-template-columns: 1fr;
+      align-items: center;
+    }
+    @media (min-width: 900px) {
+      .hero { grid-template-columns: 1.05fr 0.95fr; }
+    }
+    .hero h1 {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(2.15rem, 5vw, 3.1rem);
+      line-height: 1.1;
+      letter-spacing: -0.04em;
+      margin: 0 0 1rem 0;
+    }
+    .hero-lead {
+      color: var(--muted);
+      font-size: 1.1rem;
+      max-width: 40ch;
+      margin: 0 0 1.5rem 0;
+    }
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--muted);
+    }
+    .hero-cta { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+    .hero-visual {
+      position: relative;
+      border-radius: calc(var(--radius) + 6px);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      aspect-ratio: 16 / 10;
+      background: var(--bg0);
+    }
+    .hero-visual img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .hero-visual::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(7,11,20,0.1) 0%, rgba(7,11,20,0.55) 100%);
+      pointer-events: none;
+    }
+    section { margin-top: clamp(3rem, 7vw, 5rem); }
+    .section-head {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(1.65rem, 3vw, 2rem);
+      letter-spacing: -0.03em;
+      margin: 0 0 0.35rem 0;
+    }
+    .section-sub {
+      color: var(--muted);
+      margin: 0 0 1.75rem 0;
+      max-width: 58ch;
+    }
+    .grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    }
+    .card {
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--card);
+      padding: 1.35rem 1.35rem 1.45rem;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .card:hover {
+      border-color: rgba(56,189,248,0.35);
+      background: var(--card2);
+    }
+    .card-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1rem;
+      background: rgba(56,189,248,0.12);
+      border: 1px solid rgba(56,189,248,0.25);
+    }
+    .card-icon svg { width: 24px; height: 24px; }
+    .card h3 {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.05rem;
+      margin: 0 0 0.5rem 0;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.55;
+    }
+    .flow {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      margin-top: 1.5rem;
+    }
+    .flow-step {
+      text-align: center;
+      padding: 1rem;
+      border-radius: var(--radius);
+      border: 1px dashed var(--border);
+      background: rgba(0,0,0,0.2);
+    }
+    .flow-step strong {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 0.85rem;
+      color: var(--cyan);
+      margin-bottom: 0.35rem;
+    }
+    .flow-step span { font-size: 0.82rem; color: var(--muted); }
+    .split {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 800px) {
+      .split { grid-template-columns: 1fr 1fr; }
+    }
+    .panel {
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--card);
+      padding: 1.5rem;
+    }
+    .panel h3 {
+      font-family: var(--font-display);
+      margin: 0 0 0.75rem 0;
+      font-size: 1.1rem;
+    }
+    .panel ul {
+      margin: 0;
+      padding-left: 1.15rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .panel li { margin-bottom: 0.45rem; }
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    footer strong { color: var(--text); }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#">PortableRotor</a>
+      <nav class="nav-links" aria-label="Hauptnavigation">
+        <a href="#funktionen">Funktionen</a>
+        <a href="#architektur">Architektur</a>
+        <a href="#repo">Repository</a>
+        <a href="#start">Erste Schritte</a>
+      </nav>
+      <a class="btn" href="https://github.com/DF3MT/PortableRotor" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="hero">
+      <div>
+        <div class="hero-badges">
+          <span class="badge">ESP32</span>
+          <span class="badge">Web-UI</span>
+          <span class="badge">MQTT · Home Assistant</span>
+          <span class="badge">GPL-3.0</span>
+        </div>
+        <h1>Tragbarer Antennen-Rotor für den Amateurfunk</h1>
+        <p class="hero-lead">
+          Open Hardware &amp; Firmware: Steuerung im Browser, Automatisierung per MQTT,
+          Firmware-Updates über WLAN — der Access-Point bleibt für die Feldkonfiguration erhalten.
+        </p>
+        <div class="hero-cta">
+          <a class="btn" href="https://github.com/DF3MT/PortableRotor" target="_blank" rel="noopener">Quellcode</a>
+          <a class="btn btn--ghost" href="https://df3mt.de" target="_blank" rel="noopener">df3mt.de</a>
+        </div>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <img src="images/hero-banner.png" width="1200" height="675" alt="PortableRotor — stilistische Darstellung Rotor und Antenne">
+      </div>
+    </div>
+
+    <section id="funktionen">
+      <h2 class="section-head">Alles aus einem Projekt</h2>
+      <p class="section-sub">Mechanik, Elektronik und Software sind aufeinander abgestimmt — vom Aufbau bis zum Field Day.</p>
+      <div class="grid">
+        <article class="card">
+          <div class="card-icon" style="border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.1);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--mint)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3>Responsive Web-Oberfläche</h3>
+          <p>Touch-optimierte Bedienung, PWM-Rampen und eine Sitzung pro Browser: eine Person hält die Steuerung, ohne die Oberfläche für andere dauerhaft zu sperren.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>
+          </div>
+          <h3>SoftAP + Heim-WLAN</h3>
+          <p>Verbindung zum Router, während der Konfigurations-AP aktiv bleibt. Der DHCP-Hostname erscheint in der Geräteliste.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" style="border-color: rgba(167,139,250,0.35); background: rgba(167,139,250,0.1);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>MQTT &amp; Home Assistant</h3>
+          <p>Automatische Geräteerkennung, Befehle auf <code style="font-size:0.85em;">/set</code>, Rückmeldung auf <code style="font-size:0.85em;">/state</code>. Ungültige Nutzdaten werden verworfen.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" style="border-color: rgba(251,113,133,0.35); background: rgba(251,113,133,0.1);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--rose)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3>Updates über die Luft (OTA)</h3>
+          <p><code style="font-size:0.85em;">.bin</code>-Upload im Browser oder Arduino-IDE-Netzwerkport (mDNS). Optionales Passwort im Flash (NVS).</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          </div>
+          <h3>3D-druckbare Mechanik</h3>
+          <p>CAD- und Druckdaten im Ordner <strong>3D Model</strong> — anpassbar an Mast und Last.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon" style="border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.1);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--mint)" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <h3>Robust im Betrieb</h3>
+          <p>Drosselung störender Clients, <code style="font-size:0.85em;">yield()</code> beim langen Web-Flash, serielles Log für die Fehlersuche.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="architektur">
+      <h2 class="section-head">Architektur im Überblick</h2>
+      <p class="section-sub">Typischer Datenfluss vom Bediener bis zur H-Brücke (z. B. L298N-Klasse).</p>
+      <div class="flow">
+        <div class="flow-step"><strong>Browser</strong><span>Web-UI · Sitzungs-Cookie</span></div>
+        <div class="flow-step"><strong>ESP32</strong><span>HTTP · WLAN AP/STA</span></div>
+        <div class="flow-step"><strong>MQTT</strong><span>Home Assistant · /set</span></div>
+        <div class="flow-step"><strong>Motortreiber</strong><span>PWM · Richtung</span></div>
+        <div class="flow-step"><strong>Rotor</strong><span>Antennenlager</span></div>
+      </div>
+      <p class="section-sub" style="margin-top:1.5rem;margin-bottom:0;">
+        <strong>Hinweis:</strong> MQTT-Befehle umgehen bewusst den Web-Motor-Lock, damit Automatisierung läuft, während jemand die Oberfläche offen hat.
+      </p>
+    </section>
+
+    <section id="repo">
+      <h2 class="section-head">Repository-Struktur</h2>
+      <p class="section-sub">Oberste Ordner wie im GitHub-Repository <a href="https://github.com/DF3MT/PortableRotor" target="_blank" rel="noopener">DF3MT/PortableRotor</a>.</p>
+      <div class="split">
+        <div class="panel">
+          <h3>3D Model</h3>
+          <ul>
+            <li>Mechanik CAD / STL für den tragbaren Rotor</li>
+            <li>Montagefreundliche Benennung</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Firmware</h3>
+          <ul>
+            <li>Sketch <strong>Firmware/DF3MT-Rotor/</strong> in der Arduino IDE öffnen</li>
+            <li>Einzelseiten-UI im Flash (kein SPIFFS nötig)</li>
+            <li>Zentrale Konfiguration: <code style="font-size:0.85em;">DF3MT_Config.h</code></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="start">
+      <h2 class="section-head">Erste Schritte</h2>
+      <p class="section-sub">Kurzer Weg von den Bauteilen zur ersten Bewegung.</p>
+      <div class="panel">
+        <ol style="margin:0; padding-left:1.2rem; color:var(--muted); line-height:1.8;">
+          <li>Mechanik aus <strong>3D Model/</strong> drucken und montieren.</li>
+          <li>ESP32 mit Motortreiber verdrahten; GPIOs in der Firmware setzen.</li>
+          <li>Mit Arduino IDE flashen (ESP32-Core 3.x, <strong>OTA-Partitionsschema</strong>).</li>
+          <li>Mit dem Geräte-AP verbinden, Captive Portal / Statusseite öffnen, optional Heim-WLAN eintragen.</li>
+          <li>MQTT in der UI aktivieren, falls Home Assistant genutzt wird.</li>
+        </ol>
+        <p style="margin:1rem 0 0 0; color:var(--muted); font-size:0.95rem;">
+          Ausführliche Hinweise stehen in der README im Ordner <strong>Firmware/</strong> auf
+          <a href="https://github.com/DF3MT/PortableRotor" target="_blank" rel="noopener">GitHub</a>.
+        </p>
+      </div>
+    </section>
+
+    <footer>
+      <p><strong>PortableRotor</strong> · Open Source unter <strong>GPL-3.0</strong></p>
+      <p>
+        <a href="https://github.com/DF3MT/PortableRotor">github.com/DF3MT/PortableRotor</a>
+        · <a href="https://df3mt.de">df3mt.de</a>
+      </p>
+      <p style="margin-top:1rem; opacity:0.75;">73 · DF3MT</p>
+    </footer>
+  </main>
+</body>
+</html>

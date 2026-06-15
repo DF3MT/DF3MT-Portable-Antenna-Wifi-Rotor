@@ -1,0 +1,62 @@
+name: Firmware (ESP32)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    env:
+      SKETCH_DIR: Firmware/DF3MT-Rotor
+      FQBN: esp32:esp32:esp32:PartitionScheme=default,FlashSize=4M
+      ARDUINO_CLI_VERSION: "1.4.1"
+      ESP32_PKG_URL: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      ARDUINO_DIRECTORIES_DATA: ${{ github.workspace }}/.arduino-data
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Arduino CLI
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/bin" sh -s "$ARDUINO_CLI_VERSION"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          echo "ACLI_PATH=$HOME/bin/arduino-cli" >> "$GITHUB_ENV"
+          "$HOME/bin/arduino-cli" version
+
+      - name: Install ESP32 core
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          mkdir -p "$ARDUINO_DIRECTORIES_DATA"
+          "$ACLI" config init 2>/dev/null || true
+          "$ACLI" config set board_manager.additional_urls "$ESP32_PKG_URL"
+          "$ACLI" core update-index --additional-urls "$ESP32_PKG_URL"
+          "$ACLI" core install esp32:esp32 --additional-urls "$ESP32_PKG_URL"
+          "$ACLI" core list
+
+      - name: Install Arduino libraries
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          "$ACLI" lib update-index
+          "$ACLI" lib install "PubSubClient"
+
+      - name: Compile
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          "$ACLI" compile \
+            --fqbn "$FQBN" \
+            --output-dir "$SKETCH_DIR/build" \
+            "$SKETCH_DIR"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: df3mt-rotor-firmware
+          path: ${{ env.SKETCH_DIR }}/build/*.bin
