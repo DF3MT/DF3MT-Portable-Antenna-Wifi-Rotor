@@ -74,6 +74,30 @@ Die empfohlene Firmware (z. B. **DF3MT-Rotor**) enthält unter anderem:
 
 Ausführliche Build- und Sicherheitshinweise: **[`Firmware/DF3MT-Rotor/README.md`](./Firmware/DF3MT-Rotor/README.md)** und **[`Firmware/README.md`](./Firmware/README.md)**.
 
+### Home Assistant Lovelace Integration
+
+Eine fertige MQTT- und Lovelace-Vorlage liegt im Repository:
+
+- Paket: **[`homeassistant/packages/df3mt_rotor.yaml`](./homeassistant/packages/df3mt_rotor.yaml)**
+- Lovelace-Dashboard: **[`homeassistant/lovelace/df3mt_rotor_dashboard.yaml`](./homeassistant/lovelace/df3mt_rotor_dashboard.yaml)**
+
+Einrichtung:
+
+1. Home Assistant so konfigurieren, dass Packages geladen werden (in `configuration.yaml`):
+
+```yaml
+homeassistant:
+  packages: !include_dir_named homeassistant/packages
+```
+
+2. Datei `homeassistant/packages/df3mt_rotor.yaml` nach `<HA_CONFIG>/homeassistant/packages/` kopieren.
+3. Home Assistant neu starten oder „Check configuration“ + Neustart ausführen.
+4. Für das Dashboard entweder:
+   - den YAML-Inhalt aus `homeassistant/lovelace/df3mt_rotor_dashboard.yaml` in ein YAML-Dashboard übernehmen, oder
+   - die enthaltenen Cards manuell im UI anlegen.
+
+Standard-Topic-Prefix ist `df3mt/rotor`. Falls in der Rotor-Web-UI ein anderer Prefix gesetzt ist, die Topics im Paket entsprechend anpassen.
+
 ---
 
 ## Erste Schritte

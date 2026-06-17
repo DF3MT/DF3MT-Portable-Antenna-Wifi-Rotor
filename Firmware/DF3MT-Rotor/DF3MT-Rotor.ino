@@ -96,6 +96,9 @@ WiFiClient gMqttTcp;
 PubSubClient gMqttClient(gMqttTcp);
 /** Letzter Sollwert −255…255 (Web + MQTT), für /state und Anzeige. */
 static int gMotorPwmSigned = 0;
+/** Getrennte Speed/Richtung-Sicht (Home Assistant): Speed 0…255, Richtung −1 CCW / 0 Stopp / +1 CW. */
+static int gMotorSpeed = 0;
+static int gMotorDir = 0;
 static uint32_t gMqttLastReconnectMs = 0;
 
 static void logHttpClient(const char *what) {
@@ -281,6 +284,48 @@ static void applyMotorSignedPwm(int pwm) {
   }
 }
 
+/** Effektiven PWM aus dem Speed/Richtung-Modell berechnen und ausgeben. */
+static void motorApplyModel() {
+  applyMotorSignedPwm(gMotorDir == 0 ? 0 : gMotorDir * gMotorSpeed);
+}
+
+/**
+ * Signierten Sollwert setzen UND das Speed/Richtung-Modell synchron halten.
+ * Wird von Web-UI (/api/motor) und dem klassischen MQTT-/set genutzt, damit die
+ * getrennten Home-Assistant-Entities (Speed, Richtung) immer konsistent sind.
+ * Bei pwm==0 bleibt der zuletzt gewählte Speed erhalten (nur Richtung = Stopp).
+ */
+static void motorSetSignedSynced(int pwm) {
+  pwm = constrain(pwm, -DF3MT_MOTOR_PWM_MAX, DF3MT_MOTOR_PWM_MAX);
+  if (pwm > 0) {
+    gMotorDir = 1;
+    gMotorSpeed = pwm;
+  } else if (pwm < 0) {
+    gMotorDir = -1;
+    gMotorSpeed = -pwm;
+  } else {
+    gMotorDir = 0;
+  }
+  applyMotorSignedPwm(pwm);
+}
+
+/** Home-Assistant „Speed“ (0…255): Magnitude setzen, Richtung beibehalten. */
+static void motorSetSpeed(int spd) {
+  gMotorSpeed = constrain(spd, 0, DF3MT_MOTOR_PWM_MAX);
+  motorApplyModel();
+}
+
+/** Home-Assistant „Direction“: −1 CCW / 0 Stopp / +1 CW; Speed bleibt gemerkt. */
+static void motorSetDir(int dir) {
+  gMotorDir = (dir > 0) ? 1 : (dir < 0 ? -1 : 0);
+  motorApplyModel();
+}
+
+/** Richtung als HA-Select-Text. */
+static const char *motorDirText() {
+  return gMotorDir > 0 ? "CW" : (gMotorDir < 0 ? "CCW" : "STOP");
+}
+
 static void staBeginSaved() {
   String ssid = prefs.getString(KEY_SSID, "");
   if (ssid.length() == 0) return;
@@ -464,10 +509,21 @@ static String mqttTopicBase() {
   return mqttSanitizePrefix(prefs.getString(KEY_MQTT_PREFIX, "df3mt/rotor"));
 }
 
+/** „online“/„offline“ für Home-Assistant-Verfügbarkeit (auch als MQTT-LWT genutzt). */
+static String mqttAvailabilityTopic() { return mqttTopicBase() + "/availability"; }
+
+static void mqttPublishAvailability(bool online) {
+  if (!gMqttClient.connected()) return;
+  gMqttClient.publish(mqttAvailabilityTopic().c_str(), online ? "online" : "offline", true);
+}
+
 static void mqttPublishState() {
   if (!gMqttClient.connected()) return;
-  String topic = mqttTopicBase() + "/state";
-  gMqttClient.publish(topic.c_str(), String(gMotorPwmSigned).c_str(), true);
+  String base = mqttTopicBase();
+  gMqttClient.publish((base + "/state").c_str(), String(gMotorPwmSigned).c_str(), true);
+  gMqttClient.publish((base + "/speed/state").c_str(), String(gMotorSpeed).c_str(), true);
+  gMqttClient.publish((base + "/direction/state").c_str(), motorDirText(), true);
+  gMqttClient.publish((base + "/running/state").c_str(), gMotorPwmSigned != 0 ? "ON" : "OFF", true);
 }
 
 /** MQTT-Payload muss exakt eine ganze Zahl −DF3MT_MOTOR_PWM_MAX…+MAX sein (optional +/−, keine Leerzeichen innen). */
@@ -494,45 +550,138 @@ static bool mqttPayloadToSignedPwm(const char *str, int *out) {
   return true;
 }
 
+/** Gemeinsamer Block für jede HA-Entity: Device-Verknüpfung + Verfügbarkeit. */
+static String mqttDiscoveryCommon(const String &did) {
+  String j;
+  j += "\"device\":{\"identifiers\":[\"" + did + "\"],\"name\":\"DF3MT Rotor\",\"manufacturer\":\"DF3MT\",";
+  j += "\"model\":\"Rotor\"},";
+  j += "\"avty_t\":\"" + jsonEscape(mqttAvailabilityTopic()) + "\",";
+  j += "\"pl_avail\":\"online\",\"pl_not_avail\":\"offline\",";
+  return j;
+}
+
 static void mqttPublishDiscovery() {
   String base = mqttTopicBase();
-  String chip = mqttMacChipId();
-  String did = String("df3mt_rotor_") + chip;
-  String json = "{";
-  json += "\"name\":\"DF3MT Rotor PWM\",";
-  json += "\"uniq_id\":\"" + did + "_pwm\",";
-  json += "\"device\":{\"identifiers\":[\"" + did + "\"],\"name\":\"DF3MT Rotor\",\"manufacturer\":\"DF3MT\",";
-  json += "\"model\":\"Rotor\"},";
-  json += "\"command_topic\":\"" + jsonEscape(base + "/set") + "\",";
-  json += "\"state_topic\":\"" + jsonEscape(base + "/state") + "\",";
-  json += "\"min\":-" + String(DF3MT_MOTOR_PWM_MAX) + ",\"max\":" + String(DF3MT_MOTOR_PWM_MAX) + ",\"step\":1";
-  json += "}";
-  String dtopic = "homeassistant/number/" + did + "/config";
-  gMqttClient.publish(dtopic.c_str(), json.c_str(), true);
-  logI("mqtt", "HA discovery %s", dtopic.c_str());
+  String did = String("df3mt_rotor_") + mqttMacChipId();
+  String common = mqttDiscoveryCommon(did);
+  String maxs = String(DF3MT_MOTOR_PWM_MAX);
+
+  // 1) Signierter PWM-Sollwert (−255…255) — kombinierte Speed+Richtung (Rückwärtskompatibel).
+  {
+    String j = "{";
+    j += "\"name\":\"PWM (signed)\",";
+    j += "\"uniq_id\":\"" + did + "_pwm\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/set") + "\",";
+    j += "\"state_topic\":\"" + jsonEscape(base + "/state") + "\",";
+    j += "\"icon\":\"mdi:rotate-right\",";
+    j += "\"min\":-" + maxs + ",\"max\":" + maxs + ",\"step\":1}";
+    gMqttClient.publish(("homeassistant/number/" + did + "_pwm/config").c_str(), j.c_str(), true);
+  }
+
+  // 2) Speed (0…255) — Drehzahl/Magnitude.
+  {
+    String j = "{";
+    j += "\"name\":\"Speed\",";
+    j += "\"uniq_id\":\"" + did + "_speed\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/speed/set") + "\",";
+    j += "\"state_topic\":\"" + jsonEscape(base + "/speed/state") + "\",";
+    j += "\"icon\":\"mdi:speedometer\",";
+    j += "\"min\":0,\"max\":" + maxs + ",\"step\":1}";
+    gMqttClient.publish(("homeassistant/number/" + did + "_speed/config").c_str(), j.c_str(), true);
+  }
+
+  // 3) Direction — Select STOP/CW/CCW.
+  {
+    String j = "{";
+    j += "\"name\":\"Direction\",";
+    j += "\"uniq_id\":\"" + did + "_dir\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/direction/set") + "\",";
+    j += "\"state_topic\":\"" + jsonEscape(base + "/direction/state") + "\",";
+    j += "\"icon\":\"mdi:compass\",";
+    j += "\"options\":[\"STOP\",\"CW\",\"CCW\"]}";
+    gMqttClient.publish(("homeassistant/select/" + did + "_dir/config").c_str(), j.c_str(), true);
+  }
+
+  // 4) Stop — Button.
+  {
+    String j = "{";
+    j += "\"name\":\"Stop\",";
+    j += "\"uniq_id\":\"" + did + "_stop\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/stop/set") + "\",";
+    j += "\"payload_press\":\"STOP\",";
+    j += "\"icon\":\"mdi:stop\"}";
+    gMqttClient.publish(("homeassistant/button/" + did + "_stop/config").c_str(), j.c_str(), true);
+  }
+
+  // 5) Running — Binary-Sensor (dreht / steht).
+  {
+    String j = "{";
+    j += "\"name\":\"Running\",";
+    j += "\"uniq_id\":\"" + did + "_running\",";
+    j += common;
+    j += "\"state_topic\":\"" + jsonEscape(base + "/running/state") + "\",";
+    j += "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",";
+    j += "\"device_class\":\"running\"}";
+    gMqttClient.publish(("homeassistant/binary_sensor/" + did + "_running/config").c_str(), j.c_str(), true);
+  }
+
+  logI("mqtt", "HA discovery (5 entities) fuer %s", did.c_str());
 }
 
 static void mqttCallback(char *topic, byte *payload, unsigned int len) {
-  (void)topic;
   char buf[40];
   if (len >= sizeof(buf)) len = sizeof(buf) - 1;
   memcpy(buf, payload, len);
   buf[len] = 0;
   String s(buf);
   s.trim();
-  int p = 0;
-  if (!mqttPayloadToSignedPwm(s.c_str(), &p)) {
-    logW("mqtt", "set ignoriert (erwartet ganze Zahl, Bereich +/-%d): len=%u", DF3MT_MOTOR_PWM_MAX,
-         static_cast<unsigned>(len));
+
+  String base = mqttTopicBase();
+  String t(topic ? topic : "");
+  if (!t.startsWith(base + "/")) return;
+  String sub = t.substring(base.length() + 1);
+
+  if (sub == "set") {
+    int p = 0;
+    if (!mqttPayloadToSignedPwm(s.c_str(), &p)) {
+      logW("mqtt", "set ignoriert (erwartet ganze Zahl, Bereich +/-%d)", DF3MT_MOTOR_PWM_MAX);
+      return;
+    }
+    motorSetSignedSynced(p);
+    logI("mqtt", "set pwm=%d", p);
+  } else if (sub == "speed/set") {
+    int p = 0;
+    if (!mqttPayloadToSignedPwm(s.c_str(), &p) || p < 0) {
+      logW("mqtt", "speed ignoriert (erwartet 0…%d)", DF3MT_MOTOR_PWM_MAX);
+      return;
+    }
+    motorSetSpeed(p);
+    logI("mqtt", "set speed=%d", p);
+  } else if (sub == "direction/set") {
+    if (s.equalsIgnoreCase("CW")) motorSetDir(1);
+    else if (s.equalsIgnoreCase("CCW")) motorSetDir(-1);
+    else if (s.equalsIgnoreCase("STOP")) motorSetDir(0);
+    else {
+      logW("mqtt", "direction ignoriert (erwartet CW/CCW/STOP)");
+      return;
+    }
+    logI("mqtt", "set direction=%s", motorDirText());
+  } else if (sub == "stop/set") {
+    motorSetDir(0);
+    logI("mqtt", "stop");
+  } else {
     return;
   }
-  applyMotorSignedPwm(p);
   mqttPublishState();
-  logI("mqtt", "set pwm=%d", p);
 }
 
 static void mqttDisconnect() {
   if (gMqttClient.connected()) {
+    mqttPublishAvailability(false);
     gMqttClient.disconnect();
   }
 }
@@ -554,19 +703,24 @@ static bool mqttReconnect() {
   String cid = String("df3mt-") + mqttMacChipId();
   String user = prefs.getString(KEY_MQTT_USER, "");
   String pass = prefs.getString(KEY_MQTT_PASS, "");
+  String will = mqttAvailabilityTopic();
   bool ok;
   if (user.length() > 0) {
-    ok = gMqttClient.connect(cid.c_str(), user.c_str(), pass.c_str());
+    ok = gMqttClient.connect(cid.c_str(), user.c_str(), pass.c_str(), will.c_str(), 0, true, "offline");
   } else {
-    ok = gMqttClient.connect(cid.c_str());
+    ok = gMqttClient.connect(cid.c_str(), will.c_str(), 0, true, "offline");
   }
   if (!ok) {
     logW("mqtt", "connect fehlgeschlagen (state=%d)", gMqttClient.state());
     return false;
   }
   logI("mqtt", "verbunden %s:%u", host.c_str(), static_cast<unsigned>(port));
-  String sub = mqttTopicBase() + "/set";
-  gMqttClient.subscribe(sub.c_str());
+  String base = mqttTopicBase();
+  gMqttClient.subscribe((base + "/set").c_str());
+  gMqttClient.subscribe((base + "/speed/set").c_str());
+  gMqttClient.subscribe((base + "/direction/set").c_str());
+  gMqttClient.subscribe((base + "/stop/set").c_str());
+  mqttPublishAvailability(true);
   mqttPublishDiscovery();
   mqttPublishState();
   return true;
@@ -961,7 +1115,7 @@ void handleMotorRelease() {
     return;
   }
   gMotorLockSession = "";
-  applyMotorSignedPwm(0);
+  motorSetSignedSynced(0);
   mqttPublishState();
   logI("motor_lock", "release");
   server.send(200, "application/json", "{\"ok\":true}");
@@ -1013,11 +1167,11 @@ void handleMotorApi() {
   speed = constrain(speed, 0, DF3MT_MOTOR_PWM_MAX);
 
   if (dir == 0) {
-    applyMotorSignedPwm(0);
+    motorSetSignedSynced(0);
   } else if (dir > 0) {
-    applyMotorSignedPwm(speed);
+    motorSetSignedSynced(speed);
   } else {
-    applyMotorSignedPwm(-speed);
+    motorSetSignedSynced(-speed);
   }
   mqttPublishState();
   server.send(200, "text/plain", "ok");
@@ -1045,7 +1199,7 @@ static void setupArduinoOta() {
   }
 
   ArduinoOTA.onStart([]() {
-    applyMotorSignedPwm(0);
+    motorSetSignedSynced(0);
     sOtaLogPct = 255;
     const char *t =
         (ArduinoOTA.getCommand() == U_FLASH) ? "Firmware" : "Dateisystem";

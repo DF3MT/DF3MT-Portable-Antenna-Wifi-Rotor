@@ -35,7 +35,28 @@ Beide bewusst getrennt halten; Details stehen auch als Kommentar in `DF3MT_Confi
 ## Web-UI: Motor-Lock vs. MQTT
 
 - **Browser-Steuerung** nutzt eine **Sitzungs-ID** (Cookie `df3mt_motor_sid` + Header `X-DF3MT-Session`). Pro ESP ist **maximal eine** solche Sitzung „Lock-Inhaber“ für `/api/motor`.
-- **MQTT** (`{prefix}/set`): Befehle sind **unabhängig** vom Web-Lock — sinnvoll für Home Assistant, auch wenn gerade jemand die Webseite offen hat. Ungültige Payloads (keine ganze Zahl im Bereich −255…255) werden **ignoriert** und im Seriallog als Warnung vermerkt.
+- **MQTT**: Befehle sind **unabhängig** vom Web-Lock — sinnvoll für Home Assistant, auch wenn gerade jemand die Webseite offen hat. Ungültige Payloads werden **ignoriert** und im Seriallog als Warnung vermerkt.
+
+## MQTT / Home Assistant (Auto-Discovery)
+
+Alle Topics liegen unter dem in der Web-UI eingestellten `{prefix}` (Default `df3mt/rotor`). Beim Verbinden meldet sich die Firmware per **MQTT-Discovery** bei Home Assistant an (`homeassistant/.../df3mt_rotor_<mac>_*/config`) und legt folgende Entities an:
+
+| Entity (HA) | Typ | Command-Topic | State-Topic | Werte |
+|---|---|---|---|---|
+| PWM (signed) | `number` | `{prefix}/set` | `{prefix}/state` | ganze Zahl −255…255 (0 Stopp, + = CW, − = CCW) |
+| Speed | `number` | `{prefix}/speed/set` | `{prefix}/speed/state` | 0…255 (Magnitude) |
+| Direction | `select` | `{prefix}/direction/set` | `{prefix}/direction/state` | `STOP` / `CW` / `CCW` |
+| Stop | `button` | `{prefix}/stop/set` | – | `STOP` (Press) |
+| Running | `binary_sensor` | – | `{prefix}/running/state` | `ON` / `OFF` |
+
+- **Speed** und **Direction** bilden gemeinsam denselben Sollwert wie *PWM (signed)*: effektiver PWM = Richtung × Speed. Beim Stoppen bleibt der zuletzt gewählte Speed gemerkt, sodass ein erneutes Setzen der Richtung sofort wieder mit alter Drehzahl losdreht.
+- Web-UI, `{prefix}/set` und die getrennten Speed/Direction-Entities werden **synchron** gehalten — alle State-Topics werden nach jeder Änderung (retained) aktualisiert.
+- **Verfügbarkeit:** `{prefix}/availability` führt `online`/`offline` (mit MQTT-LWT), sodass HA die Entities bei Verbindungsverlust korrekt als *nicht verfügbar* anzeigt.
+
+Fertige Home-Assistant-Dateien im Repository:
+
+- Paket: **[`homeassistant/packages/df3mt_rotor.yaml`](../../homeassistant/packages/df3mt_rotor.yaml)**
+- Lovelace-Dashboard-Vorlage: **[`homeassistant/lovelace/df3mt_rotor_dashboard.yaml`](../../homeassistant/lovelace/df3mt_rotor_dashboard.yaml)**
 
 ## HTTP 429 (Rate-Limit)
 
