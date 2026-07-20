@@ -517,6 +517,20 @@ static void mqttPublishAvailability(bool online) {
   gMqttClient.publish(mqttAvailabilityTopic().c_str(), online ? "online" : "offline", true);
 }
 
+/** Basis-URL der eingebauten Web-UI (STA-IP bevorzugt, sonst SoftAP-IP). */
+static String mqttDeviceUrl() {
+  IPAddress ip = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP() : WiFi.softAPIP();
+  String url = "http://" + ip.toString();
+  if (DF3MT_HTTP_PORT != 80) url += ":" + String(static_cast<unsigned>(DF3MT_HTTP_PORT));
+  return url;
+}
+
+/** Web-URL der Rotor-Oberfläche als retained Sensor veröffentlichen. */
+static void mqttPublishUrl() {
+  if (!gMqttClient.connected()) return;
+  gMqttClient.publish((mqttTopicBase() + "/url/state").c_str(), mqttDeviceUrl().c_str(), true);
+}
+
 static void mqttPublishState() {
   if (!gMqttClient.connected()) return;
   String base = mqttTopicBase();
@@ -629,7 +643,43 @@ static void mqttPublishDiscovery() {
     gMqttClient.publish(("homeassistant/binary_sensor/" + did + "_running/config").c_str(), j.c_str(), true);
   }
 
-  logI("mqtt", "HA discovery (5 entities) fuer %s", did.c_str());
+  // 6) Web-URL — Sensor mit Link zur eingebauten Rotor-Oberfläche.
+  {
+    String j = "{";
+    j += "\"name\":\"Web URL\",";
+    j += "\"uniq_id\":\"" + did + "_url\",";
+    j += common;
+    j += "\"state_topic\":\"" + jsonEscape(base + "/url/state") + "\",";
+    j += "\"icon\":\"mdi:web\",";
+    j += "\"entity_category\":\"diagnostic\"}";
+    gMqttClient.publish(("homeassistant/sensor/" + did + "_url/config").c_str(), j.c_str(), true);
+  }
+
+  // 7) Rotate CW — Button (dreht im Uhrzeigersinn mit aktueller Speed, wie Web-UI).
+  {
+    String j = "{";
+    j += "\"name\":\"Rotate CW\",";
+    j += "\"uniq_id\":\"" + did + "_cw\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/cw/set") + "\",";
+    j += "\"payload_press\":\"CW\",";
+    j += "\"icon\":\"mdi:rotate-right\"}";
+    gMqttClient.publish(("homeassistant/button/" + did + "_cw/config").c_str(), j.c_str(), true);
+  }
+
+  // 8) Rotate CCW — Button (dreht gegen den Uhrzeigersinn mit aktueller Speed, wie Web-UI).
+  {
+    String j = "{";
+    j += "\"name\":\"Rotate CCW\",";
+    j += "\"uniq_id\":\"" + did + "_ccw\",";
+    j += common;
+    j += "\"command_topic\":\"" + jsonEscape(base + "/ccw/set") + "\",";
+    j += "\"payload_press\":\"CCW\",";
+    j += "\"icon\":\"mdi:rotate-left\"}";
+    gMqttClient.publish(("homeassistant/button/" + did + "_ccw/config").c_str(), j.c_str(), true);
+  }
+
+  logI("mqtt", "HA discovery (8 entities) fuer %s", did.c_str());
 }
 
 static void mqttCallback(char *topic, byte *payload, unsigned int len) {
@@ -670,6 +720,12 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
       return;
     }
     logI("mqtt", "set direction=%s", motorDirText());
+  } else if (sub == "cw/set") {
+    motorSetDir(1);
+    logI("mqtt", "rotate CW");
+  } else if (sub == "ccw/set") {
+    motorSetDir(-1);
+    logI("mqtt", "rotate CCW");
   } else if (sub == "stop/set") {
     motorSetDir(0);
     logI("mqtt", "stop");
@@ -719,10 +775,13 @@ static bool mqttReconnect() {
   gMqttClient.subscribe((base + "/set").c_str());
   gMqttClient.subscribe((base + "/speed/set").c_str());
   gMqttClient.subscribe((base + "/direction/set").c_str());
+  gMqttClient.subscribe((base + "/cw/set").c_str());
+  gMqttClient.subscribe((base + "/ccw/set").c_str());
   gMqttClient.subscribe((base + "/stop/set").c_str());
   mqttPublishAvailability(true);
   mqttPublishDiscovery();
   mqttPublishState();
+  mqttPublishUrl();
   return true;
 }
 
