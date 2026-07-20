@@ -3,13 +3,16 @@ name: Release firmware (ESP32)
 # Publishes the compiled firmware to GitHub Releases so users can download a
 # ready-to-flash .bin without building it themselves.
 #
-# Trigger either by:
-#   * pushing a version tag:  git tag v1.0.0 && git push origin v1.0.0
-#   * or manually: Actions -> "Release firmware (ESP32)" -> Run workflow (enter a tag)
+# Runs on:
+#   * a pushed version tag:            git tag v1.0.0 && git push origin v1.0.0
+#   * a Release published in the UI:    (binaries are built and attached to it)
+#   * manual dispatch:                  Actions -> Run workflow (enter a tag)
 
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -22,7 +25,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: self-hosted
+    # GitHub-hosted runner: works out of the box, no self-hosted runner needed.
+    runs-on: ubuntu-latest
 
     env:
       SKETCH_DIR: Firmware/DF3MT-Rotor
@@ -30,7 +34,8 @@ jobs:
       ARDUINO_CLI_VERSION: "1.4.1"
       ESP32_PKG_URL: https://espressif.github.io/arduino-esp32/package_esp32_index.json
       ARDUINO_DIRECTORIES_DATA: ${{ github.workspace }}/.arduino-data
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # Resolves for tag push, UI-published release, and manual dispatch.
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v6
@@ -82,19 +87,14 @@ jobs:
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -la dist
 
-      - name: Publish GitHub Release
+      - name: Attach binaries to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
+          # For tag/dispatch runs this creates the release with generated notes;
+          # for a UI-published release it only adds the assets (keeps your title/notes).
+          generate_release_notes: ${{ github.event_name != 'release' }}
           fail_on_unmatched_files: true
-          body: |
-            Prebuilt DF3MT-Rotor firmware.
-
-            - `DF3MT-Rotor.bin` / `DF3MT-Rotor-${{ env.RELEASE_TAG }}.bin` — application image for **OTA** (web-UI `.bin` upload / `POST /api/ota/update`) or Arduino-IDE network upload.
-            - `DF3MT-Rotor-${{ env.RELEASE_TAG }}-merged.bin` — full 4 MB image for **first-time USB flashing** at offset `0x0` (e.g. `esptool.py write_flash 0x0 DF3MT-Rotor-*-merged.bin`).
-            - `SHA256SUMS.txt` — checksums.
           files: |
             dist/*.bin
             dist/SHA256SUMS.txt
