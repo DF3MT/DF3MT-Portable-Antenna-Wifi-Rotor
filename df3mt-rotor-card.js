@@ -9,29 +9,31 @@
  *   -1 % -> PWM -150 ... -100 % -> -255  (counter-clockwise)
  *    0 % -> 0 (stop)
  *
- * It writes the signed PWM to the firmware's "PWM (signed)" number entity
- * (created by MQTT discovery: number.df3mt_rotor_pwm_signed), so no YAML
- * package is required. The mapping is done in the card, in JavaScript.
+ * Commands are published as INTEGERS directly to the firmware setpoint topic
+ * (default df3mt/rotor/set) via the mqtt.publish service. This matches exactly
+ * what the firmware expects (it accepts only whole numbers) and avoids the
+ * HA number entity publishing floats like "202.0", which the firmware ignores.
+ * State for the slider is read from the signed-PWM entity when available.
  *
  * Minimal example:
  *   type: custom:df3mt-rotor-card
  *
- * The CW/CCW/STOP buttons and the slider all drive the signed setpoint entity
- * (mapped in JS), so CW/CCW always rotate at a moving speed (PWM >= 150) equal
- * to the current/last slider magnitude - never a stale sub-threshold value.
- *
  * Full config (defaults shown):
  *   type: custom:df3mt-rotor-card
  *   title: DF3MT Rotor
- *   signed_pwm: number.df3mt_rotor_pwm_signed   # signed PWM -255..255
- *   default_speed: 50                            # % used by CW/CCW if slider is at 0
+ *   command_topic: df3mt/rotor/set   # firmware signed setpoint topic (match your MQTT prefix)
+ *   signed_pwm: number.df3mt_rotor_pwm_signed   # read-back for the slider (optional)
+ *   default_speed: 50                # % used by CW/CCW when the slider is at 0
  *   running: binary_sensor.df3mt_rotor_running
  *   direction: select.df3mt_rotor_direction
  *   url: sensor.df3mt_rotor_web_url
  */
 
+const CARD_VERSION = "1.4.0";
+
 const DEFAULTS = {
   title: "DF3MT Rotor",
+  command_topic: "df3mt/rotor/set",
   signed_pwm: "number.df3mt_rotor_pwm_signed",
   default_speed: 50,
   running: "binary_sensor.df3mt_rotor_running",
@@ -69,8 +71,6 @@ class DF3MTRotorCard extends HTMLElement {
   setConfig(config) {
     this._config = Object.assign({}, DEFAULTS, config || {});
     this._dragging = false;
-    // Last non-zero magnitude the user selected (percent), used by the
-    // CW/CCW buttons so they always rotate at a mapped, moving speed.
     this._lastMag = Math.min(100, Math.max(1, Number(this._config.default_speed) || 50));
     this._render();
   }
@@ -93,20 +93,21 @@ class DF3MTRotorCard extends HTMLElement {
     return this._hass.states[entityId];
   }
 
-  // Current magnitude (percent) to use for the CW/CCW buttons: the slider's
-  // magnitude if set, otherwise the last non-zero value the user chose.
+  // Current magnitude (percent) for the CW/CCW buttons: the slider's magnitude
+  // if set, otherwise the last non-zero value the user chose.
   _currentMagPct() {
     const slider = this._root && this._root.querySelector("#speed");
     const mag = slider ? Math.abs(Math.round(Number(slider.value))) : 0;
     return mag || this._lastMag || 50;
   }
 
+  // Publish the signed PWM as a plain integer to the firmware's setpoint topic.
   _setSignedPct(pct) {
-    const ent = this._config.signed_pwm;
-    if (!this._hass || !ent) return;
-    this._hass.callService("number", "set_value", {
-      entity_id: ent,
-      value: pctToPwm(pct),
+    if (!this._hass) return;
+    const pwm = pctToPwm(pct);
+    this._hass.callService("mqtt", "publish", {
+      topic: this._config.command_topic,
+      payload: String(pwm),
     });
   }
 
@@ -141,8 +142,7 @@ class DF3MTRotorCard extends HTMLElement {
         .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--disabled-text-color); vertical-align: middle; }
         .status .dot.on { background: var(--success-color, #4ade80); }
         .status a { color: var(--primary-color); text-decoration: none; }
-        .dim { opacity: 0.5; }
-        button.dim { pointer-events: none; }
+        .ver { margin-top: 10px; text-align: right; font-size: 0.7rem; color: var(--secondary-text-color); opacity: 0.7; }
       </style>
       <div class="wrap">
         <div class="title" id="title"></div>
@@ -167,14 +167,14 @@ class DF3MTRotorCard extends HTMLElement {
           <span id="dirwrap">Direction: <b id="dir">--</b></span>
           <span id="urlwrap"></span>
         </div>
+        <div class="ver">card v${CARD_VERSION}</div>
       </div>
     `;
     this.shadowRoot.appendChild(card);
     this._root = card;
 
     // CW/CCW rotate at the current (or last) slider magnitude, mapped to a
-    // moving PWM (>=150). STOP sets 0. This avoids the firmware rotating at a
-    // stale sub-threshold speed (e.g. PWM 13, which never moves the motor).
+    // moving PWM (>=150). STOP sets 0.
     card.querySelector("#ccw").addEventListener("click", () => this._setSignedPct(-this._currentMagPct()));
     card.querySelector("#stop").addEventListener("click", () => this._setSignedPct(0));
     card.querySelector("#cw").addEventListener("click", () => this._setSignedPct(this._currentMagPct()));
@@ -203,18 +203,10 @@ class DF3MTRotorCard extends HTMLElement {
 
     q("#title").textContent = cfg.title;
 
-    // Buttons and slider both drive the signed-PWM entity; dim them together
-    // if it is unavailable (but never make the slider un-draggable).
+    // Controls are ALWAYS enabled and clickable. Sync the slider position from
+    // the signed-PWM entity when available and not dragging (display only).
     const pwmSt = this._state(cfg.signed_pwm);
-    const ctrlOk = pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown";
-    q("#ccw").classList.toggle("dim", !ctrlOk);
-    q("#stop").classList.toggle("dim", !ctrlOk);
-    q("#cw").classList.toggle("dim", !ctrlOk);
-
-    // The slider stays interactive at all times; we only sync its value from
-    // the signed-PWM entity when a fresh value is available and not dragging.
-    q(".speed").classList.toggle("dim", !pwmSt);
-    if (pwmSt && !this._dragging) {
+    if (pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown" && !this._dragging) {
       const pct = pwmToPct(pwmSt.state);
       q("#speed").value = String(pct);
       q("#speedval").textContent = speedLabel(pct);
@@ -262,4 +254,4 @@ window.customCards.push({
   documentation: "https://github.com/DF3MT/DF3MT-Portable-Antenna-Wifi-Rotor",
 });
 
-console.info("%c DF3MT-ROTOR-CARD %c loaded ", "background:#38bdf8;color:#0c1222;font-weight:700;border-radius:4px 0 0 4px;padding:2px 6px", "background:#141c32;color:#eef2ff;border-radius:0 4px 4px 0;padding:2px 6px");
+console.info("%c DF3MT-ROTOR-CARD %c v" + CARD_VERSION + " ", "background:#38bdf8;color:#0c1222;font-weight:700;border-radius:4px 0 0 4px;padding:2px 6px", "background:#141c32;color:#eef2ff;border-radius:0 4px 4px 0;padding:2px 6px");
