@@ -30,6 +30,8 @@
  *   url: sensor.df3mt_rotor_web_url
  */
 
+const CARD_VERSION = "1.3.2";
+
 const DEFAULTS = {
   title: "DF3MT Rotor",
   signed_pwm: "number.df3mt_rotor_pwm_signed",
@@ -141,8 +143,8 @@ class DF3MTRotorCard extends HTMLElement {
         .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--disabled-text-color); vertical-align: middle; }
         .status .dot.on { background: var(--success-color, #4ade80); }
         .status a { color: var(--primary-color); text-decoration: none; }
-        .dim { opacity: 0.5; }
-        button.dim { pointer-events: none; }
+        .dim { opacity: 0.55; }
+        .ver { margin-top: 10px; text-align: right; font-size: 0.7rem; color: var(--secondary-text-color); opacity: 0.7; }
       </style>
       <div class="wrap">
         <div class="title" id="title"></div>
@@ -167,6 +169,7 @@ class DF3MTRotorCard extends HTMLElement {
           <span id="dirwrap">Direction: <b id="dir">--</b></span>
           <span id="urlwrap"></span>
         </div>
+        <div class="ver">card v${CARD_VERSION}</div>
       </div>
     `;
     this.shadowRoot.appendChild(card);
@@ -203,18 +206,10 @@ class DF3MTRotorCard extends HTMLElement {
 
     q("#title").textContent = cfg.title;
 
-    // Buttons and slider both drive the signed-PWM entity; dim them together
-    // if it is unavailable (but never make the slider un-draggable).
+    // Controls are ALWAYS enabled and clickable — never dimmed or blocked,
+    // regardless of entity availability, so the buttons can't appear disabled.
     const pwmSt = this._state(cfg.signed_pwm);
-    const ctrlOk = pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown";
-    q("#ccw").classList.toggle("dim", !ctrlOk);
-    q("#stop").classList.toggle("dim", !ctrlOk);
-    q("#cw").classList.toggle("dim", !ctrlOk);
-
-    // The slider stays interactive at all times; we only sync its value from
-    // the signed-PWM entity when a fresh value is available and not dragging.
-    q(".speed").classList.toggle("dim", !pwmSt);
-    if (pwmSt && !this._dragging) {
+    if (pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown" && !this._dragging) {
       const pct = pwmToPct(pwmSt.state);
       q("#speed").value = String(pct);
       q("#speedval").textContent = speedLabel(pct);
@@ -262,4 +257,4 @@ window.customCards.push({
   documentation: "https://github.com/DF3MT/DF3MT-Portable-Antenna-Wifi-Rotor",
 });
 
-console.info("%c DF3MT-ROTOR-CARD %c loaded ", "background:#38bdf8;color:#0c1222;font-weight:700;border-radius:4px 0 0 4px;padding:2px 6px", "background:#141c32;color:#eef2ff;border-radius:0 4px 4px 0;padding:2px 6px");
+console.info("%c DF3MT-ROTOR-CARD %c v" + CARD_VERSION + " ", "background:#38bdf8;color:#0c1222;font-weight:700;border-radius:4px 0 0 4px;padding:2px 6px", "background:#141c32;color:#eef2ff;border-radius:0 4px 4px 0;padding:2px 6px");
