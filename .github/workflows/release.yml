@@ -22,7 +22,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: self-hosted
+    # GitHub-hosted runner: works out of the box, no self-hosted runner needed.
+    runs-on: ubuntu-latest
 
     env:
       SKETCH_DIR: Firmware/DF3MT-Rotor
