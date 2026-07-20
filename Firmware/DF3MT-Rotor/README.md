@@ -46,8 +46,11 @@ Alle Topics liegen unter dem in der Web-UI eingestellten `{prefix}` (Default `df
 | PWM (signed) | `number` | `{prefix}/set` | `{prefix}/state` | ganze Zahl −255…255 (0 Stopp, + = CW, − = CCW) |
 | Speed | `number` | `{prefix}/speed/set` | `{prefix}/speed/state` | 0…255 (Magnitude) |
 | Direction | `select` | `{prefix}/direction/set` | `{prefix}/direction/state` | `STOP` / `CW` / `CCW` |
+| Rotate CW | `button` | `{prefix}/cw/set` | – | `CW` (Press) — dreht im Uhrzeigersinn mit aktueller Speed |
+| Rotate CCW | `button` | `{prefix}/ccw/set` | – | `CCW` (Press) — dreht gegen den Uhrzeigersinn mit aktueller Speed |
 | Stop | `button` | `{prefix}/stop/set` | – | `STOP` (Press) |
 | Running | `binary_sensor` | – | `{prefix}/running/state` | `ON` / `OFF` |
+| Web URL | `sensor` | – | `{prefix}/url/state` | z. B. `http://192.168.4.1` — Link zur eingebauten Web-UI |
 
 - **Speed** und **Direction** bilden gemeinsam denselben Sollwert wie *PWM (signed)*: effektiver PWM = Richtung × Speed. Beim Stoppen bleibt der zuletzt gewählte Speed gemerkt, sodass ein erneutes Setzen der Richtung sofort wieder mit alter Drehzahl losdreht.
 - Web-UI, `{prefix}/set` und die getrennten Speed/Direction-Entities werden **synchron** gehalten — alle State-Topics werden nach jeder Änderung (retained) aktualisiert.
