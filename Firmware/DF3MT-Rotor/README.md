@@ -71,6 +71,14 @@ Einstellungen: `DF3MT_MOTOR_API_GUEST_COOLDOWN_MS`, `DF3MT_MOTOR_CLAIM_BUSY_COOL
 
 Beim Schreiben der Firmware-Chunks wird nach jedem erfolgreichen `Update.write` **`yield()`** aufgerufen, damit der Watchdog und andere Tasks Luft bekommen.
 
+### Fertige Firmware herunterladen (GitHub Releases)
+
+Vorgebaute Binaries werden über **GitHub Releases** bereitgestellt (Workflow `.github/workflows/release.yml`, ausgelöst durch einen Versions-Tag `v*` oder manuell via *Actions → Run workflow*):
+
+- **`DF3MT-Rotor.bin`** — Applikations-Image für **OTA** (Web-UI-`.bin`-Upload bzw. `POST /api/ota/update`) oder Arduino-IDE-Netzwerk-Upload.
+- **`DF3MT-Rotor-<tag>-merged.bin`** — vollständiges 4-MB-Image für die **erste USB-Flashung** bei Offset `0x0` (z. B. `esptool.py write_flash 0x0 DF3MT-Rotor-<tag>-merged.bin`).
+- **`SHA256SUMS.txt`** — Prüfsummen.
+
 ## `.gitignore`
 
 Enthält u. a. Build-Ordner, typische Binärartefakte und Platzhalter für lokale Secret-Header (`secrets.h`, `DF3MT_Secrets.h`). Ergänze bei Bedarf eigene Einträge (IDE-Caches, persönliche Skripte).

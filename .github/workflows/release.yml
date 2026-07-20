@@ -1,0 +1,100 @@
+name: Release firmware (ESP32)
+
+# Publishes the compiled firmware to GitHub Releases so users can download a
+# ready-to-flash .bin without building it themselves.
+#
+# Trigger either by:
+#   * pushing a version tag:  git tag v1.0.0 && git push origin v1.0.0
+#   * or manually: Actions -> "Release firmware (ESP32)" -> Run workflow (enter a tag)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. v1.0.0)"
+        required: true
+        default: "v0.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: self-hosted
+
+    env:
+      SKETCH_DIR: Firmware/DF3MT-Rotor
+      FQBN: esp32:esp32:esp32:PartitionScheme=default,FlashSize=4M
+      ARDUINO_CLI_VERSION: "1.4.1"
+      ESP32_PKG_URL: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      ARDUINO_DIRECTORIES_DATA: ${{ github.workspace }}/.arduino-data
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Arduino CLI
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/bin" sh -s "$ARDUINO_CLI_VERSION"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          echo "ACLI_PATH=$HOME/bin/arduino-cli" >> "$GITHUB_ENV"
+          "$HOME/bin/arduino-cli" version
+
+      - name: Install ESP32 core
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          mkdir -p "$ARDUINO_DIRECTORIES_DATA"
+          "$ACLI" config init 2>/dev/null || true
+          "$ACLI" config set board_manager.additional_urls "$ESP32_PKG_URL"
+          "$ACLI" core update-index --additional-urls "$ESP32_PKG_URL"
+          "$ACLI" core install esp32:esp32 --additional-urls "$ESP32_PKG_URL"
+
+      - name: Install Arduino libraries
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          "$ACLI" lib update-index
+          "$ACLI" lib install "PubSubClient"
+
+      - name: Compile
+        run: |
+          ACLI="${ACLI_PATH:-$HOME/bin/arduino-cli}"
+          test -x "$ACLI" || { echo "Arduino CLI fehlt: $ACLI"; exit 127; }
+          "$ACLI" compile \
+            --fqbn "$FQBN" \
+            --output-dir "$SKETCH_DIR/build" \
+            "$SKETCH_DIR"
+
+      - name: Stage release assets
+        run: |
+          mkdir -p dist
+          # OTA / Arduino-IDE application image (use this for the web-UI OTA upload).
+          cp "$SKETCH_DIR/build/DF3MT-Rotor.ino.bin" "dist/DF3MT-Rotor-${RELEASE_TAG}.bin"
+          cp "$SKETCH_DIR/build/DF3MT-Rotor.ino.bin" "dist/DF3MT-Rotor.bin"
+          # Full 4 MB image for first-time USB flashing at offset 0x0 with esptool.
+          if [ -f "$SKETCH_DIR/build/DF3MT-Rotor.ino.merged.bin" ]; then
+            cp "$SKETCH_DIR/build/DF3MT-Rotor.ino.merged.bin" "dist/DF3MT-Rotor-${RELEASE_TAG}-merged.bin"
+          fi
+          ( cd dist && sha256sum * > SHA256SUMS.txt )
+          ls -la dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Prebuilt DF3MT-Rotor firmware.
+
+            - `DF3MT-Rotor.bin` / `DF3MT-Rotor-${{ env.RELEASE_TAG }}.bin` — application image for **OTA** (web-UI `.bin` upload / `POST /api/ota/update`) or Arduino-IDE network upload.
+            - `DF3MT-Rotor-${{ env.RELEASE_TAG }}-merged.bin` — full 4 MB image for **first-time USB flashing** at offset `0x0` (e.g. `esptool.py write_flash 0x0 DF3MT-Rotor-*-merged.bin`).
+            - `SHA256SUMS.txt` — checksums.
+          files: |
+            dist/*.bin
+            dist/SHA256SUMS.txt
