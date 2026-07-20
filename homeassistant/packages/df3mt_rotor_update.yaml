@@ -1,0 +1,80 @@
+# DF3MT Portable Rotor - update checker (Home Assistant package)
+#
+# Lets Home Assistant tell you when a newer release of the rotor card / firmware
+# is published on GitHub, without relying on HACS.
+#
+# NOTE: If you installed the card via HACS, HACS ALREADY checks for updates and
+# shows them in the HACS panel (and, on recent HACS, as an `update.` entity).
+# This package is a HACS-independent alternative / extra dashboard indicator.
+#
+# Include from configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named homeassistant/packages
+#
+# After loading, set `input_text.df3mt_rotor_card_version` to the version you
+# currently have installed (e.g. the release tag shown in HACS, like "v1.2.0").
+
+# Polls the GitHub "latest release" of the repository (default: every 6 hours).
+rest:
+  - resource: https://api.github.com/repos/DF3MT/DF3MT-Portable-Antenna-Wifi-Rotor/releases/latest
+    scan_interval: 21600
+    timeout: 20
+    headers:
+      Accept: application/vnd.github+json
+      User-Agent: home-assistant-df3mt-rotor
+    sensor:
+      - name: DF3MT Rotor Latest Release
+        unique_id: df3mt_rotor_latest_release
+        icon: mdi:github
+        value_template: "{{ value_json.tag_name }}"
+        json_attributes:
+          - html_url
+          - name
+          - published_at
+          - body
+
+# The version you currently have installed. Set this once (and after upgrading).
+input_text:
+  df3mt_rotor_card_version:
+    name: DF3MT Rotor Card installed version
+    icon: mdi:tag
+    max: 32
+
+template:
+  - binary_sensor:
+      - name: DF3MT Rotor Card Update Available
+        unique_id: df3mt_rotor_card_update_available
+        device_class: update
+        icon: mdi:package-up
+        # "on" when the latest published release differs from the installed
+        # version (and the latest release has actually been fetched).
+        state: >-
+          {% set latest = states('sensor.df3mt_rotor_latest_release') %}
+          {% set installed = states('input_text.df3mt_rotor_card_version') | trim %}
+          {{ latest not in ['unknown', 'unavailable', 'none', ''] and installed != ''
+             and installed != latest }}
+        availability: >-
+          {{ states('sensor.df3mt_rotor_latest_release') not in ['unknown', 'unavailable'] }}
+        attributes:
+          installed: "{{ states('input_text.df3mt_rotor_card_version') }}"
+          latest: "{{ states('sensor.df3mt_rotor_latest_release') }}"
+          release_url: "{{ state_attr('sensor.df3mt_rotor_latest_release', 'html_url') }}"
+
+automation:
+  - alias: DF3MT Rotor Card update notification
+    id: df3mt_rotor_card_update_notification
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.df3mt_rotor_card_update_available
+        to: "on"
+    action:
+      - service: persistent_notification.create
+        data:
+          notification_id: df3mt_rotor_card_update
+          title: DF3MT Rotor update available
+          message: >-
+            A new release **{{ states('sensor.df3mt_rotor_latest_release') }}** is
+            available (installed {{ states('input_text.df3mt_rotor_card_version') }}).
+            Update in HACS, then set the installed-version helper to the new tag.
+            Release notes: {{ state_attr('sensor.df3mt_rotor_latest_release', 'html_url') }}
