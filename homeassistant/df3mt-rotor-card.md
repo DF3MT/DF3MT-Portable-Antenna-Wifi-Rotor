@@ -67,6 +67,26 @@ CCW. The percentage maps to the firmware PWM range in the card (JS): `±1 % = ±
 (created by MQTT discovery), so **no YAML package is required**. The CW/CCW buttons
 rotate at the currently set speed.
 
+## Update notifications
+
+**Via HACS (recommended):** if you installed the card through HACS, HACS already
+checks GitHub for newer releases and shows an update in the HACS panel (and, on
+recent HACS versions, as an `update.` entity you can add to a dashboard or use in
+automations). Nothing else to do.
+
+**HACS-independent:** the package `homeassistant/packages/df3mt_rotor_update.yaml`
+adds a Home Assistant native check:
+
+- `sensor.df3mt_rotor_latest_release` — polls the GitHub *latest release* tag (every 6 h) with the release URL/notes as attributes.
+- `input_text.df3mt_rotor_card_version` — set this to the version you have installed (the release tag, e.g. `v1.2.0`).
+- `binary_sensor.df3mt_rotor_card_update_available` (`device_class: update`) — turns **on** when the latest release differs from your installed version.
+- An automation raises a persistent notification (with the release-notes link) when an update becomes available.
+
+Load the package (`homeassistant: packages: !include_dir_named homeassistant/packages`),
+restart HA, then set the installed-version helper. Put
+`binary_sensor.df3mt_rotor_card_update_available` on your dashboard for an at-a-glance
+indicator.
+
 ## License
 
 GPL-3.0, same as the DF3MT PortableRotor project.
