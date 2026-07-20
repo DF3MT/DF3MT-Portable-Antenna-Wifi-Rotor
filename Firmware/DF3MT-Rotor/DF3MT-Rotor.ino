@@ -27,6 +27,7 @@
 #include <Preferences.h>
 #include <esp_netif.h>
 #include <esp_idf_version.h>
+#include <esp_sleep.h>
 #include <DNSServer.h>
 #include <cctype>
 #include <cstdarg>
@@ -98,8 +99,20 @@ PubSubClient gMqttClient(gMqttTcp);
 static int gMotorPwmSigned = 0;
 /** Getrennte Speed/Richtung-Sicht (Home Assistant): Speed 0…255, Richtung −1 CCW / 0 Stopp / +1 CW. */
 static int gMotorSpeed = 0;
+/** Idle-Deep-Sleep: letzte echte Interaktion (ms seit Boot). */
+static uint32_t gLastActivityMs = 0;
+/** Während Timer-Wake-Lauschfenster: MQTT-/Web-Befehl empfangen. */
+static volatile bool gSleepPollGotActivity = false;
+/** Arduino-OTA oder Web-Flash läuft — kein Sleep. */
+static bool gOtaBusy = false;
 static int gMotorDir = 0;
 static uint32_t gMqttLastReconnectMs = 0;
+
+static void noteActivity();
+static void enterDeepSleep(const char *reason);
+static bool sleepPrerequisitesMet();
+static void maintainIdleSleep();
+static bool runMqttPollWakeCycle();
 
 static void logHttpClient(const char *what) {
   Serial.printf("[%8lu][ERR][http] %s method=%s uri=%s args=%d\n",
@@ -465,6 +478,7 @@ void handleWifiSave() {
     logI("sta", "WLAN-Daten unveraendert, Verbindung bleibt bestehen");
   }
 
+  noteActivity();
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -732,6 +746,7 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   } else {
     return;
   }
+  noteActivity();
   mqttPublishState();
 }
 
@@ -853,6 +868,7 @@ void handleMqttSave() {
   mqttDisconnect();
   gMqttLastReconnectMs = 0;
   logI("mqtt", "NVS gespeichert en=%d", en ? 1 : 0);
+  noteActivity();
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -963,6 +979,8 @@ void handleOtaUpdateUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
     sOtaWebBeginFailed = false;
+    gOtaBusy = true;
+    noteActivity();
     sOtaWebAuthOk = otaPasswordRequired() ? (server.header("X-OTA-Password") == otaPasswordEffective())
                                           : true;
     sOtaWebUpdateActive = false;
@@ -1043,6 +1061,7 @@ static void handleRootHead() {
 }
 
 void handleRoot() {
+  noteActivity();
   /* Große Seite nicht als String ins RAM kopieren (vermeidet Absturz → ERR_CONNECTION_RESET). */
   const size_t total = sizeof(kIndexHtml) - 1;
   server.setContentLength(total);
@@ -1146,6 +1165,7 @@ void handleMotorClaim() {
   if (gMotorLockSession.length() > 0) {
     if (sid == gMotorLockSession) {
       logI("motor_lock", "reconnect (session)");
+      noteActivity();
       server.send(200, "application/json", "{\"ok\":true}");
       return;
     }
@@ -1160,6 +1180,7 @@ void handleMotorClaim() {
 
   gMotorLockSession = sid;
   logI("motor_lock", "claim (session)");
+  noteActivity();
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -1190,6 +1211,7 @@ void handleMotorKeepalive() {
     server.send(403, "application/json", "{\"ok\":false,\"err\":\"session\"}");
     return;
   }
+  noteActivity();
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -1232,6 +1254,7 @@ void handleMotorApi() {
   } else {
     motorSetSignedSynced(-speed);
   }
+  noteActivity();
   mqttPublishState();
   server.send(200, "text/plain", "ok");
 }
@@ -1259,6 +1282,8 @@ static void setupArduinoOta() {
 
   ArduinoOTA.onStart([]() {
     motorSetSignedSynced(0);
+    gOtaBusy = true;
+    noteActivity();
     sOtaLogPct = 255;
     const char *t =
         (ArduinoOTA.getCommand() == U_FLASH) ? "Firmware" : "Dateisystem";
@@ -1300,6 +1325,134 @@ static void setupArduinoOta() {
   }
 }
 
+#if DF3MT_IDLE_SLEEP_ENABLE
+static void noteActivity() {
+  gLastActivityMs = millis();
+  gSleepPollGotActivity = true;
+}
+
+static bool sleepPrerequisitesMet() {
+  // Ohne Heim-WLAN + MQTT wäre SoftAP die einzige Erreichbarkeit — dann nicht schlafen.
+  if (!mqttCfgEnabled()) return false;
+  String ssid = prefs.getString(KEY_SSID, "");
+  ssid.trim();
+  if (ssid.length() == 0) return false;
+  String host = prefs.getString(KEY_MQTT_HOST, "");
+  host.trim();
+  if (host.length() == 0) return false;
+  return true;
+}
+
+static void sleepConfigureWakeSources() {
+  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(DF3MT_SLEEP_POLL_MS) * 1000ULL);
+#if DF3MT_SLEEP_WAKE_GPIO >= 0
+  {
+    const gpio_num_t pin = static_cast<gpio_num_t>(DF3MT_SLEEP_WAKE_GPIO);
+    pinMode(DF3MT_SLEEP_WAKE_GPIO, INPUT_PULLUP);
+    esp_sleep_enable_ext0_wakeup(pin, 0);  // aktiv low (Taster nach GND)
+  }
+#endif
+}
+
+static void enterDeepSleep(const char *reason) {
+  logI("sleep", "Deep Sleep (%s) — Timer %u ms%s", reason ? reason : "idle",
+       static_cast<unsigned>(DF3MT_SLEEP_POLL_MS),
+#if DF3MT_SLEEP_WAKE_GPIO >= 0
+       ", GPIO-Wake aktiv"
+#else
+       ""
+#endif
+  );
+  motorStop();
+  if (gMqttClient.connected()) {
+    mqttPublishAvailability(false);
+    gMqttClient.disconnect();
+  }
+  delay(30);
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+  delay(20);
+  sleepConfigureWakeSources();
+  esp_deep_sleep_start();
+}
+
+/** Timer-Wake: kurz STA+MQTT, lauschen; true = Aktivität → voller Neustart. Schläft sonst erneut. */
+static bool runMqttPollWakeCycle() {
+  if (!sleepPrerequisitesMet()) {
+    logI("sleep", "Poll-Wake: Sleep-Voraussetzungen fehlen — bleibe wach");
+    return true;
+  }
+
+  gSleepPollGotActivity = false;
+  pinMode(L298N_IN1, OUTPUT);
+  pinMode(L298N_IN2, OUTPUT);
+  if (!ledcAttach(L298N_ENA, PWM_FREQ, PWM_RES)) {
+    logW("sleep", "ledcAttach fehlgeschlagen (Poll)");
+  }
+  motorStop();
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setHostname(DF3MT_WIFI_STA_HOSTNAME);
+  String ssid = prefs.getString(KEY_SSID, "");
+  String pass = prefs.getString(KEY_PASS, "");
+  logI("sleep", "Poll-Wake: verbinde STA \"%s\" …", ssid.c_str());
+  WiFi.begin(ssid.c_str(), pass.c_str());
+
+  const uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         (uint32_t)(millis() - t0) < DF3MT_SLEEP_STA_WAIT_MS) {
+    delay(50);
+    yield();
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    logW("sleep", "Poll-Wake: STA Timeout — erneut schlafen");
+    enterDeepSleep("sta-timeout");
+  }
+
+  gMqttLastReconnectMs = 0;
+  if (!mqttReconnect()) {
+    logW("sleep", "Poll-Wake: MQTT fehlgeschlagen — erneut schlafen");
+    enterDeepSleep("mqtt-fail");
+  }
+
+  logI("sleep", "Poll-Wake: lausche %u ms auf MQTT …", static_cast<unsigned>(DF3MT_SLEEP_LISTEN_MS));
+  const uint32_t listenStart = millis();
+  while ((uint32_t)(millis() - listenStart) < DF3MT_SLEEP_LISTEN_MS) {
+    gMqttClient.loop();
+    if (gSleepPollGotActivity) {
+      logI("sleep", "Poll-Wake: MQTT-Aktivitaet — voller Start");
+      mqttPublishAvailability(false);
+      gMqttClient.disconnect();
+      WiFi.disconnect(true, false);
+      WiFi.mode(WIFI_OFF);
+      delay(50);
+      return true;
+    }
+    delay(10);
+    yield();
+  }
+
+  logI("sleep", "Poll-Wake: keine Aktivitaet — weiter schlafen");
+  enterDeepSleep("poll-idle");
+  return false;  // unreachable
+}
+
+static void maintainIdleSleep() {
+  if (!sleepPrerequisitesMet()) return;
+  if (gOtaBusy || sOtaWebUpdateActive) return;
+  if (gMotorPwmSigned != 0) return;
+  if (WiFi.softAPgetStationNum() > 0) return;
+  if ((uint32_t)(millis() - gLastActivityMs) < DF3MT_IDLE_SLEEP_MS) return;
+  enterDeepSleep("idle-30s");
+}
+#else
+static void noteActivity() { gLastActivityMs = millis(); }
+static void maintainIdleSleep() {}
+static bool runMqttPollWakeCycle() { return true; }
+#endif
+
 void setup() {
   Serial.begin(DF3MT_SERIAL_BAUD);
   delay(DF3MT_BOOT_DELAY_MS);
@@ -1308,6 +1461,26 @@ void setup() {
   if (!prefs.begin(PREF_NS, false)) {
     logE("prefs", "begin(\"%s\") fehlgeschlagen — NVS/Flash pruefen", PREF_NS);
   }
+
+#if DF3MT_IDLE_SLEEP_ENABLE
+  {
+    const esp_sleep_wakeup_cause_t wake = esp_sleep_get_wakeup_cause();
+    if (wake == ESP_SLEEP_WAKEUP_TIMER) {
+      logI("sleep", "Aufgewacht: Timer (MQTT-Poll)");
+      if (runMqttPollWakeCycle()) {
+        logI("sleep", "MQTT-Befehl empfangen — Neustart in den Vollbetrieb");
+        ESP.restart();
+      }
+    } else if (wake == ESP_SLEEP_WAKEUP_EXT0) {
+      logI("sleep", "Aufgewacht: GPIO-Taster");
+    } else {
+      logI("sleep", "Kaltstart / Reset (Idle-Sleep %u ms)", static_cast<unsigned>(DF3MT_IDLE_SLEEP_MS));
+    }
+  }
+#endif
+
+  gLastActivityMs = millis();
+  gSleepPollGotActivity = false;
 
   pinMode(L298N_IN1, OUTPUT);
   pinMode(L298N_IN2, OUTPUT);
@@ -1405,5 +1578,6 @@ void loop() {
   server.handleClient();
   maintainStaConnection();
   maintainMqtt();
+  maintainIdleSleep();
   yield();
 }
