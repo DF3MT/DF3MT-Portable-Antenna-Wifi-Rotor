@@ -16,13 +16,15 @@
  * Minimal example:
  *   type: custom:df3mt-rotor-card
  *
+ * The CW/CCW/STOP buttons and the slider all drive the signed setpoint entity
+ * (mapped in JS), so CW/CCW always rotate at a moving speed (PWM >= 150) equal
+ * to the current/last slider magnitude - never a stale sub-threshold value.
+ *
  * Full config (defaults shown):
  *   type: custom:df3mt-rotor-card
  *   title: DF3MT Rotor
- *   ccw_button: button.df3mt_rotor_rotate_ccw
- *   stop_button: button.df3mt_rotor_stop
- *   cw_button: button.df3mt_rotor_rotate_cw
  *   signed_pwm: number.df3mt_rotor_pwm_signed   # signed PWM -255..255
+ *   default_speed: 50                            # % used by CW/CCW if slider is at 0
  *   running: binary_sensor.df3mt_rotor_running
  *   direction: select.df3mt_rotor_direction
  *   url: sensor.df3mt_rotor_web_url
@@ -30,10 +32,8 @@
 
 const DEFAULTS = {
   title: "DF3MT Rotor",
-  ccw_button: "button.df3mt_rotor_rotate_ccw",
-  stop_button: "button.df3mt_rotor_stop",
-  cw_button: "button.df3mt_rotor_rotate_cw",
   signed_pwm: "number.df3mt_rotor_pwm_signed",
+  default_speed: 50,
   running: "binary_sensor.df3mt_rotor_running",
   direction: "select.df3mt_rotor_direction",
   url: "sensor.df3mt_rotor_web_url",
@@ -69,6 +69,9 @@ class DF3MTRotorCard extends HTMLElement {
   setConfig(config) {
     this._config = Object.assign({}, DEFAULTS, config || {});
     this._dragging = false;
+    // Last non-zero magnitude the user selected (percent), used by the
+    // CW/CCW buttons so they always rotate at a mapped, moving speed.
+    this._lastMag = Math.min(100, Math.max(1, Number(this._config.default_speed) || 50));
     this._render();
   }
 
@@ -90,10 +93,12 @@ class DF3MTRotorCard extends HTMLElement {
     return this._hass.states[entityId];
   }
 
-  _press(entityId) {
-    if (!this._hass || !entityId) return;
-    const domain = entityId.split(".")[0];
-    this._hass.callService(domain, "press", { entity_id: entityId });
+  // Current magnitude (percent) to use for the CW/CCW buttons: the slider's
+  // magnitude if set, otherwise the last non-zero value the user chose.
+  _currentMagPct() {
+    const slider = this._root && this._root.querySelector("#speed");
+    const mag = slider ? Math.abs(Math.round(Number(slider.value))) : 0;
+    return mag || this._lastMag || 50;
   }
 
   _setSignedPct(pct) {
@@ -167,17 +172,24 @@ class DF3MTRotorCard extends HTMLElement {
     this.shadowRoot.appendChild(card);
     this._root = card;
 
-    card.querySelector("#ccw").addEventListener("click", () => this._press(this._config.ccw_button));
-    card.querySelector("#stop").addEventListener("click", () => this._press(this._config.stop_button));
-    card.querySelector("#cw").addEventListener("click", () => this._press(this._config.cw_button));
+    // CW/CCW rotate at the current (or last) slider magnitude, mapped to a
+    // moving PWM (>=150). STOP sets 0. This avoids the firmware rotating at a
+    // stale sub-threshold speed (e.g. PWM 13, which never moves the motor).
+    card.querySelector("#ccw").addEventListener("click", () => this._setSignedPct(-this._currentMagPct()));
+    card.querySelector("#stop").addEventListener("click", () => this._setSignedPct(0));
+    card.querySelector("#cw").addEventListener("click", () => this._setSignedPct(this._currentMagPct()));
 
     const slider = card.querySelector("#speed");
     slider.addEventListener("input", () => {
       this._dragging = true;
+      const mag = Math.abs(Math.round(Number(slider.value)));
+      if (mag) this._lastMag = mag;
       card.querySelector("#speedval").textContent = speedLabel(slider.value);
     });
     slider.addEventListener("change", () => {
       this._dragging = false;
+      const mag = Math.abs(Math.round(Number(slider.value)));
+      if (mag) this._lastMag = mag;
       this._setSignedPct(slider.value);
     });
 
@@ -191,18 +203,16 @@ class DF3MTRotorCard extends HTMLElement {
 
     q("#title").textContent = cfg.title;
 
-    const setBtnAvail = (id, entId) => {
-      const st = this._state(entId);
-      const ok = st && st.state !== "unavailable" && st.state !== "unknown";
-      q(id).classList.toggle("dim", !ok);
-    };
-    setBtnAvail("#ccw", cfg.ccw_button);
-    setBtnAvail("#stop", cfg.stop_button);
-    setBtnAvail("#cw", cfg.cw_button);
+    // Buttons and slider both drive the signed-PWM entity; dim them together
+    // if it is unavailable (but never make the slider un-draggable).
+    const pwmSt = this._state(cfg.signed_pwm);
+    const ctrlOk = pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown";
+    q("#ccw").classList.toggle("dim", !ctrlOk);
+    q("#stop").classList.toggle("dim", !ctrlOk);
+    q("#cw").classList.toggle("dim", !ctrlOk);
 
     // The slider stays interactive at all times; we only sync its value from
     // the signed-PWM entity when a fresh value is available and not dragging.
-    const pwmSt = this._state(cfg.signed_pwm);
     q(".speed").classList.toggle("dim", !pwmSt);
     if (pwmSt && !this._dragging) {
       const pct = pwmToPct(pwmSt.state);
