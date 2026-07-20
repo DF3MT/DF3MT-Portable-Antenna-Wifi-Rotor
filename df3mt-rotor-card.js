@@ -1,10 +1,17 @@
 /**
  * DF3MT Rotor Card
  * A Lovelace card that controls the DF3MT Portable Rotor like its web UI:
- * CCW / STOP / CW buttons plus a speed slider (1-100 %).
+ * CCW / STOP / CW buttons plus a signed speed slider.
  *
- * It drives the MQTT entities created by the DF3MT firmware discovery /
- * the `homeassistant/packages/df3mt_rotor.yaml` package.
+ * The slider is centered at 0 (Stop). Positive = CW, negative = CCW, as a
+ * percentage of the usable PWM range:
+ *   +1 % -> PWM 150 ... +100 % -> 255   (clockwise)
+ *   -1 % -> PWM -150 ... -100 % -> -255  (counter-clockwise)
+ *    0 % -> 0 (stop)
+ *
+ * It writes the signed PWM to the firmware's "PWM (signed)" number entity
+ * (created by MQTT discovery: number.df3mt_rotor_pwm_signed), so no YAML
+ * package is required. The mapping is done in the card, in JavaScript.
  *
  * Minimal example:
  *   type: custom:df3mt-rotor-card
@@ -15,7 +22,7 @@
  *   ccw_button: button.df3mt_rotor_rotate_ccw
  *   stop_button: button.df3mt_rotor_stop
  *   cw_button: button.df3mt_rotor_rotate_cw
- *   speed: number.df3mt_rotor_speed_percent   # 1-100 % (mapped to PWM 150-255)
+ *   signed_pwm: number.df3mt_rotor_pwm_signed   # signed PWM -255..255
  *   running: binary_sensor.df3mt_rotor_running
  *   direction: select.df3mt_rotor_direction
  *   url: sensor.df3mt_rotor_web_url
@@ -26,11 +33,37 @@ const DEFAULTS = {
   ccw_button: "button.df3mt_rotor_rotate_ccw",
   stop_button: "button.df3mt_rotor_stop",
   cw_button: "button.df3mt_rotor_rotate_cw",
-  speed: "number.df3mt_rotor_speed_percent",
+  signed_pwm: "number.df3mt_rotor_pwm_signed",
   running: "binary_sensor.df3mt_rotor_running",
   direction: "select.df3mt_rotor_direction",
   url: "sensor.df3mt_rotor_web_url",
 };
+
+const PWM_MIN = 150; // slowest PWM that actually moves the motor
+const PWM_MAX = 255; // full speed
+const SPAN = PWM_MAX - PWM_MIN;
+
+// signed percent (-100..100) -> signed PWM (0, or +/-150..255)
+function pctToPwm(pct) {
+  const p = Math.round(Number(pct));
+  if (!p) return 0;
+  const mag = Math.round(PWM_MIN + (Math.abs(p) - 1) * SPAN / 99);
+  return p > 0 ? mag : -mag;
+}
+
+// signed PWM -> signed percent (-100..100)
+function pwmToPct(pwm) {
+  const r = Math.round(Number(pwm));
+  if (Number.isNaN(r) || Math.abs(r) < PWM_MIN) return 0;
+  const mag = Math.round((Math.abs(r) - PWM_MIN) * 99 / SPAN + 1);
+  return r > 0 ? mag : -mag;
+}
+
+function speedLabel(pct) {
+  const n = Math.round(Number(pct));
+  if (!n) return "Stop";
+  return (n > 0 ? "CW " : "CCW ") + Math.abs(n) + " %";
+}
 
 class DF3MTRotorCard extends HTMLElement {
   setConfig(config) {
@@ -63,12 +96,12 @@ class DF3MTRotorCard extends HTMLElement {
     this._hass.callService(domain, "press", { entity_id: entityId });
   }
 
-  _setSpeed(value) {
-    const ent = this._config.speed;
+  _setSignedPct(pct) {
+    const ent = this._config.signed_pwm;
     if (!this._hass || !ent) return;
     this._hass.callService("number", "set_value", {
       entity_id: ent,
-      value: Number(value),
+      value: pctToPwm(pct),
     });
   }
 
@@ -97,12 +130,14 @@ class DF3MTRotorCard extends HTMLElement {
         .speed-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
         .speed-head .lbl { color: var(--secondary-text-color); }
         .speed-head .val { font-variant-numeric: tabular-nums; font-weight: 600; }
-        input[type=range] { width: 100%; accent-color: var(--primary-color); height: 26px; }
+        input[type=range] { width: 100%; accent-color: var(--primary-color); height: 30px; cursor: pointer; }
+        .scale { display: flex; justify-content: space-between; color: var(--secondary-text-color); font-size: 0.72rem; margin-top: 2px; }
         .status { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px 18px; color: var(--secondary-text-color); font-size: 0.9rem; }
         .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--disabled-text-color); vertical-align: middle; }
         .status .dot.on { background: var(--success-color, #4ade80); }
         .status a { color: var(--primary-color); text-decoration: none; }
-        .unavail { opacity: 0.5; pointer-events: none; }
+        .dim { opacity: 0.5; }
+        button.dim { pointer-events: none; }
       </style>
       <div class="wrap">
         <div class="title" id="title"></div>
@@ -118,8 +153,9 @@ class DF3MTRotorCard extends HTMLElement {
           </button>
         </div>
         <div class="speed">
-          <div class="speed-head"><span class="lbl">Speed</span><span class="val" id="speedval">--</span></div>
-          <input type="range" id="speed" min="1" max="100" step="1" value="1" />
+          <div class="speed-head"><span class="lbl">Speed &amp; direction</span><span class="val" id="speedval">Stop</span></div>
+          <input type="range" id="speed" min="-100" max="100" step="1" value="0" />
+          <div class="scale"><span>CCW 100 %</span><span>Stop</span><span>CW 100 %</span></div>
         </div>
         <div class="status">
           <span id="run"><span class="dot" id="rundot"></span><span id="runtxt">Idle</span></span>
@@ -138,11 +174,11 @@ class DF3MTRotorCard extends HTMLElement {
     const slider = card.querySelector("#speed");
     slider.addEventListener("input", () => {
       this._dragging = true;
-      card.querySelector("#speedval").textContent = slider.value + " %";
+      card.querySelector("#speedval").textContent = speedLabel(slider.value);
     });
     slider.addEventListener("change", () => {
       this._dragging = false;
-      this._setSpeed(slider.value);
+      this._setSignedPct(slider.value);
     });
 
     this._update();
@@ -155,24 +191,23 @@ class DF3MTRotorCard extends HTMLElement {
 
     q("#title").textContent = cfg.title;
 
-    const setAvail = (id, entId) => {
-      const el = q(id);
+    const setBtnAvail = (id, entId) => {
       const st = this._state(entId);
       const ok = st && st.state !== "unavailable" && st.state !== "unknown";
-      el.classList.toggle("unavail", !ok);
-      return st;
+      q(id).classList.toggle("dim", !ok);
     };
-    setAvail("#ccw", cfg.ccw_button);
-    setAvail("#stop", cfg.stop_button);
-    setAvail("#cw", cfg.cw_button);
+    setBtnAvail("#ccw", cfg.ccw_button);
+    setBtnAvail("#stop", cfg.stop_button);
+    setBtnAvail("#cw", cfg.cw_button);
 
-    const speedSt = setAvail("#speed", cfg.speed);
-    if (speedSt && !this._dragging) {
-      const v = Math.round(Number(speedSt.state));
-      if (!Number.isNaN(v)) {
-        q("#speed").value = String(v);
-        q("#speedval").textContent = v + " %";
-      }
+    // The slider stays interactive at all times; we only sync its value from
+    // the signed-PWM entity when a fresh value is available and not dragging.
+    const pwmSt = this._state(cfg.signed_pwm);
+    q(".speed").classList.toggle("dim", !pwmSt);
+    if (pwmSt && !this._dragging) {
+      const pct = pwmToPct(pwmSt.state);
+      q("#speed").value = String(pct);
+      q("#speedval").textContent = speedLabel(pct);
     }
 
     const runSt = this._state(cfg.running);
@@ -212,7 +247,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "df3mt-rotor-card",
   name: "DF3MT Rotor Card",
-  description: "Control the DF3MT Portable Rotor (CCW / STOP / CW + speed %), like the web UI.",
+  description: "Control the DF3MT Portable Rotor (CCW / STOP / CW + signed speed %), like the web UI.",
   preview: false,
   documentation: "https://github.com/DF3MT/DF3MT-Portable-Antenna-Wifi-Rotor",
 });
