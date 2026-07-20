@@ -87,14 +87,18 @@ jobs:
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -la dist
 
+      # Uses the runner's built-in GitHub CLI (no Node-based third-party action,
+      # so no deprecated-Node runtime warnings).
       - name: Attach binaries to the GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          # For tag/dispatch runs this creates the release with generated notes;
-          # for a UI-published release it only adds the assets (keeps your title/notes).
-          generate_release_notes: ${{ github.event_name != 'release' }}
-          fail_on_unmatched_files: true
-          files: |
-            dist/*.bin
-            dist/SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Release already exists (e.g. published from the UI): only add assets,
+            # keep the existing title/notes.
+            gh release upload "$RELEASE_TAG" dist/*.bin dist/SHA256SUMS.txt --clobber
+          else
+            # Tag push / manual dispatch: create the release with generated notes.
+            gh release create "$RELEASE_TAG" dist/*.bin dist/SHA256SUMS.txt \
+              --title "$RELEASE_TAG" --generate-notes
+          fi
