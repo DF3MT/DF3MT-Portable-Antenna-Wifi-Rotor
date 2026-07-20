@@ -29,7 +29,7 @@
  *   url: sensor.df3mt_rotor_web_url
  */
 
-const CARD_VERSION = "1.4.1";
+const CARD_VERSION = "1.5.1";
 
 const DEFAULTS = {
   title: "DF3MT Rotor",
