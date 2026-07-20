@@ -13,12 +13,23 @@ It uses the MQTT entities the rotor firmware creates via Home Assistant auto-dis
 
 ## Install
 
+This repository is HACS-plugin compliant at its root: `df3mt-rotor-card.js` +
+`hacs.json` (`content_in_root: true`, `filename: df3mt-rotor-card.js`).
+
 ### Via HACS (custom repository)
 
 1. HACS → three-dot menu (top right) → **Custom repositories**.
-2. Repository: the URL of this card's repository. Type/Category: **Dashboard**.
-3. Add, then search HACS for **DF3MT Rotor Card** and download it.
-4. HACS adds the Lovelace resource automatically. Reload your browser (Ctrl/Cmd+Shift+R).
+2. Repository: `https://github.com/DF3MT/DF3MT-Portable-Antenna-Wifi-Rotor`. Category: **Dashboard**.
+3. Add, then search HACS for **DF3MT Rotor Card**.
+4. Open it and **Download**. If HACS pre-selects a release that predates this card
+   (e.g. `v1.0.0`, which only shipped firmware binaries), use the version dropdown
+   and pick the **main** branch or a release `>= v1.1.0` (those include the card).
+5. HACS adds the Lovelace resource automatically. Reload your browser (Ctrl/Cmd+Shift+R).
+
+> Note: HACS resolves a plugin from the **latest release** first, then the selected
+> branch. Releases `<= v1.0.0` do not contain `df3mt-rotor-card.js`, which is why HACS
+> reports *"Repository structure for v1.0.0 is not compliant"* — pick the **main**
+> branch (or a newer release) in the version dropdown instead.
 
 ### Manual (without HACS)
 
