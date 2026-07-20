@@ -1,11 +1,12 @@
 name: Release firmware (ESP32)
 
 # Publishes the compiled firmware to GitHub Releases so users can download a
-# ready-to-flash .bin without building it themselves.
+# ready-to-flash .bin without building it themselves. Also attaches the HACS
+# Lovelace card (df3mt-rotor-card.js) so release-based HACS installs are valid.
 #
 # Runs on:
 #   * a pushed version tag:            git tag v1.0.0 && git push origin v1.0.0
-#   * a Release published in the UI:    (binaries are built and attached to it)
+#   * a Release published in the UI:    (assets are built and attached to it)
 #   * manual dispatch:                  Actions -> Run workflow (enter a tag)
 
 on:
@@ -84,21 +85,26 @@ jobs:
           if [ -f "$SKETCH_DIR/build/DF3MT-Rotor.ino.merged.bin" ]; then
             cp "$SKETCH_DIR/build/DF3MT-Rotor.ino.merged.bin" "dist/DF3MT-Rotor-${RELEASE_TAG}-merged.bin"
           fi
+          # HACS Lovelace card (repo root) so release-based HACS plugin installs
+          # find a compliant .js in the latest release.
+          if [ -f df3mt-rotor-card.js ]; then
+            cp df3mt-rotor-card.js dist/df3mt-rotor-card.js
+          fi
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -la dist
 
       # Uses the runner's built-in GitHub CLI (no Node-based third-party action,
       # so no deprecated-Node runtime warnings).
-      - name: Attach binaries to the GitHub Release
+      - name: Attach assets to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             # Release already exists (e.g. published from the UI): only add assets,
             # keep the existing title/notes.
-            gh release upload "$RELEASE_TAG" dist/*.bin dist/SHA256SUMS.txt --clobber
+            gh release upload "$RELEASE_TAG" dist/* --clobber
           else
             # Tag push / manual dispatch: create the release with generated notes.
-            gh release create "$RELEASE_TAG" dist/*.bin dist/SHA256SUMS.txt \
+            gh release create "$RELEASE_TAG" dist/* \
               --title "$RELEASE_TAG" --generate-notes
           fi
