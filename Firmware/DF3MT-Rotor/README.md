@@ -71,16 +71,6 @@ Einstellungen: `DF3MT_MOTOR_API_GUEST_COOLDOWN_MS`, `DF3MT_MOTOR_CLAIM_BUSY_COOL
 
 Beim Schreiben der Firmware-Chunks wird nach jedem erfolgreichen `Update.write` **`yield()`** aufgerufen, damit der Watchdog und andere Tasks Luft bekommen.
 
-### Idle Deep Sleep (Strom sparen)
-
-Nach **30 s** ohne echte Interaktion (Motor-Befehl per Web/MQTT, Config-Speichern, Öffnen der Web-UI; reine Status-GETs zählen nicht) geht der ESP32 in **Deep Sleep**, sofern Heim-WLAN + MQTT konfiguriert/aktiviert sind und kein SoftAP-Client verbunden ist. Läuft der Motor oder ein OTA, wird nicht geschlafen.
-
-**Wichtig:** Im Deep Sleep ist WLAN aus — MQTT kann den Chip **nicht direkt** wecken. Stattdessen wacht der ESP periodisch per Timer (~2,5 s) kurz auf, verbindet STA+MQTT und lauscht ~2 s. Kommt in diesem Fenster ein MQTT-/Steuerbefehl, startet der volle Betrieb neu; sonst schläft er weiter. Typische Reaktionslatenz auf MQTT: ca. 2–5 s.
-
-Optionaler Taster: in `DF3MT_Config.h` `DF3MT_SLEEP_WAKE_GPIO` auf einen RTC-fähigen GPIO setzen (Taster nach GND, interner Pull-up) — weckt sofort. `-1` = aus.
-
-Abschalten: `#define DF3MT_IDLE_SLEEP_ENABLE 0`.
-
 ### Fertige Firmware herunterladen (GitHub Releases)
 
 Vorgebaute Binaries werden über **GitHub Releases** bereitgestellt (Workflow `.github/workflows/release.yml`, ausgelöst durch einen Versions-Tag `v*` oder manuell via *Actions → Run workflow*):

@@ -96,20 +96,6 @@
 #define DF3MT_UI_MQTT_SAVE_DELAY_1_MS 400
 #define DF3MT_UI_MQTT_SAVE_DELAY_2_MS 3000
 
-/* --- Idle Deep Sleep (Variante A: Timer-Wake + kurzes MQTT-Lauschfenster) ---
- * Nach DF3MT_IDLE_SLEEP_MS ohne echte Interaktion (Motor/MQTT-Befehl/Config/UI-Root)
- * geht der ESP in Deep Sleep. Echtes MQTT-Wake ist im Deep Sleep unmöglich (WLAN aus),
- * daher periodisches Timer-Wake: kurz STA+MQTT aufbauen, DF3MT_SLEEP_LISTEN_MS lauschen,
- * bei Befehl wach bleiben (voller SoftAP-Neustart), sonst wieder schlafen.
- * Optional: physischer Taster an DF3MT_SLEEP_WAKE_GPIO (gegen GND, intern Pull-up)
- * weckt sofort (RTC-fähiger GPIO, z. B. 4/12/13/14/15/25–27/32–39; -1 = aus). */
-#define DF3MT_IDLE_SLEEP_ENABLE 1
-#define DF3MT_IDLE_SLEEP_MS 30000
-#define DF3MT_SLEEP_POLL_MS 2500
-#define DF3MT_SLEEP_LISTEN_MS 2000
-#define DF3MT_SLEEP_STA_WAIT_MS 12000
-#define DF3MT_SLEEP_WAKE_GPIO (-1)
-
 /* Komma-getrennt für JS: Reihenfolge muss zu kIndexHtml.h passen */
 #define DF3MT_UI_NUMPACK_STR                                                                 \
   DF3MT_XSTR(DF3MT_MOTOR_PWM_MAX) "," DF3MT_XSTR(DF3MT_UI_RAMP_UP_MS) ","                    \
