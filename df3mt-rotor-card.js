@@ -29,7 +29,7 @@
  *   url: sensor.df3mt_rotor_web_url
  */
 
-const CARD_VERSION = "1.4.0";
+const CARD_VERSION = "1.4.1";
 
 const DEFAULTS = {
   title: "DF3MT Rotor",
@@ -142,7 +142,7 @@ class DF3MTRotorCard extends HTMLElement {
         .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--disabled-text-color); vertical-align: middle; }
         .status .dot.on { background: var(--success-color, #4ade80); }
         .status a { color: var(--primary-color); text-decoration: none; }
-        .dim { opacity: 0.55; }
+        .ver { margin-top: 10px; text-align: right; font-size: 0.7rem; color: var(--secondary-text-color); opacity: 0.7; }
       </style>
       <div class="wrap">
         <div class="title" id="title"></div>
@@ -203,19 +203,10 @@ class DF3MTRotorCard extends HTMLElement {
 
     q("#title").textContent = cfg.title;
 
-    // Controls always stay clickable. We only visually dim them when the rotor
-    // is explicitly offline (setpoint entity reports "unavailable"); a missing
-    // or "unknown" state must NOT disable the controls.
+    // Controls are ALWAYS enabled and clickable. Sync the slider position from
+    // the signed-PWM entity when available and not dragging (display only).
     const pwmSt = this._state(cfg.signed_pwm);
-    const offline = !!pwmSt && pwmSt.state === "unavailable";
-    q("#ccw").classList.toggle("dim", offline);
-    q("#stop").classList.toggle("dim", offline);
-    q("#cw").classList.toggle("dim", offline);
-
-    // The slider stays interactive at all times; we only sync its value from
-    // the signed-PWM entity when a fresh value is available and not dragging.
-    q(".speed").classList.toggle("dim", offline);
-    if (pwmSt && !this._dragging) {
+    if (pwmSt && pwmSt.state !== "unavailable" && pwmSt.state !== "unknown" && !this._dragging) {
       const pct = pwmToPct(pwmSt.state);
       q("#speed").value = String(pct);
       q("#speedval").textContent = speedLabel(pct);
